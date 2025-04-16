@@ -1,0 +1,43 @@
+<tool id="tiling_pyhist" name="Tile Images with PyHIST" version="1.0.1">
+    <description>Tile pathology images using PyHIST in parallel</description>
+    <requirements>
+        <requirements>
+            <container type="docker">mmunozag/pyhist:latest</container>
+        </requirements>
+    </requirements>
+    <command><![CDATA[
+        python "$__tool_directory__/tiling_pyhist.py"
+            --input '$input_file'
+            --output_zip '$output_zip'
+    ]]></command>
+    <inputs>
+        <param name="input_file" type="data" format="zip,svs,tiff,tif" label="Input ZIP File or Single Image"
+               help="Select a ZIP file containing images or a single pathology image (.svs, .tiff, .tif)." />
+    </inputs>
+    <outputs>
+        <data name="output_zip" format="zip" label="Tiled Images ZIP" />
+    </outputs>
+    <help><![CDATA[
+**Tile Images with PyHIST**
+
+This tool tiles pathology images using PyHIST via Podman. It accepts either:
+
+- A single pathology image file (e.g., .svs, .tiff, .tif).
+- A ZIP file containing multiple pathology images.
+
+For ZIP files, images are processed in parallel batches (20% of total images per batch) to reduce processing time on multi-core systems. The output is a ZIP file containing tiled images organized by input image name.
+
+**Inputs:**
+- **Input ZIP File or Single Image**: Upload a ZIP file or a single image file (.svs, .tiff, .tif).
+- **Output ZIP Filename**: Specify the name of the output ZIP file (default: tiled_output.zip).
+
+**Outputs:**
+- **Tiled Images ZIP**: A ZIP file containing tiled images in folders named after each input image.
+
+**Note**: Requires Podman and Python 3.11 on the Galaxy server. Ensure sufficient disk space and CPU cores for parallel processing.
+    ]]></help>
+    <citations>
+        <citation type="doi">10.1093/bioinformatics/btab106</citation>
+    </citations>
+</tool>
+
