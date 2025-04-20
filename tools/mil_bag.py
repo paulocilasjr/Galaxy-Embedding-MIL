@@ -298,7 +298,10 @@ def distribute_embeddings(configs, metadata, split_files):
     non_sample_columns = None
 
     if not prevent_leakage:
-        logging.warning("Counting rows in %s; may be slow for large files", embeddings_path)
+        logging.warning(
+            "Counting rows in %s; may be slow for large files",
+            embeddings_path
+        )
         total_rows = sum(1 for _ in open(embeddings_path)) - 1
         proportions = convert_proportions(proportion_string)
         split_counts = calculate_split_counts(total_rows, proportions)
@@ -307,11 +310,12 @@ def distribute_embeddings(configs, metadata, split_files):
         sample_to_split = dict(zip(metadata["sample_name"], metadata["split"]))
         sample_to_label = dict(zip(metadata["sample_name"], metadata["label"]))
 
-    # Use a dictionary to track if the file for a given split has been written to before.
+    # Use a dictionary to track if
+    # the file for a given split has been written to before.
     first_write = {split: True for split in split_files}
 
     try:
-        first_header_read = True  # Only used to determine header info from the first chunk.
+        first_header_read = True
         for chunk in pd.read_csv(embeddings_path, chunksize=buffer_size):
             if first_header_read:
                 orig_header = list(chunk.columns)
@@ -415,12 +419,13 @@ def bag_by_sample(df, split, bag_file, config, batch_size=100,
         df (pd.DataFrame): The DataFrame containing the data.
         split (str): The split identifier (e.g., 'train', 'val').
         bag_file (str): The path to the Parquet file to write the bags.
-        config (object): Configuration object with bag_size, pooling_method, etc.
-        batch_size (int, optional): The number of rows to write in each batch. Defaults to 100.
-        fixed_target_bags (tuple, optional): (target_label, num_bags) to generate bags only for target_label.
+        config (object): Configuration object with bag_size, pooling_method...
+        batch_size (int, optional): The number of rows to write in each batch.
+        fixed_target_bags (tuple, optional): (target_label, num_bags)
+        to generate bags only for target_label.
 
     Output row format:
-        sample_name, bag_label, split, bag_size, vector_0, vector_1, ..., vector_N
+        sample_name, bag_label, split, bag_size, vector_0, vector_1, vector_N
     """
     log_msg = f"Processing by sample for split: {split}"
     if fixed_target_bags:
@@ -449,12 +454,12 @@ def bag_by_sample(df, split, bag_file, config, batch_size=100,
             )
             return
 
-        available_samples = target_samples.copy()  # Now a list
-        np.random.shuffle(available_samples)       # Shuffles the list in place
+        available_samples = target_samples.copy()
+        np.random.shuffle(available_samples)
 
         while bag_count < target_needed:
             if len(available_samples) == 0:
-                available_samples = target_samples.copy()  # Reset as a list
+                available_samples = target_samples.copy()
                 np.random.shuffle(available_samples)
                 logging.info(
                     "Reusing samples for target label %d in split %s",
@@ -814,7 +819,9 @@ def bag_in_turns(df, split, bag_file, config, batch_size=500,
                 break
 
             # Aggregate embeddings.
-            vec_col_indices = [df.columns.get_loc(col) for col in vector_columns]
+            vec_col_indices = [
+                df.columns.get_loc(col) for col in vector_columns
+            ]
             embeddings = bag_data[:, vec_col_indices].astype(np.float32)
             aggregated_embedding = aggregate_embeddings(
                 embeddings,
