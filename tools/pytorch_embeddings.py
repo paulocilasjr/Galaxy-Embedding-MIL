@@ -1,20 +1,16 @@
 """
-This module provides functionality to extract
-image embeddings using a specified
-pretrained model from the torchvision library.
-It includes functions to:
-- Load and process images from a ZIP file.
+This module provides functionality to extract image embeddings using a specified
+pretrained model from the torchvision library. It includes functions to:
+- List image files directly from a ZIP file without extraction.
 - Apply model-specific preprocessing and transformations.
 - Extract embeddings using various models.
 - Save the resulting embeddings into a CSV file.
 Modules required:
 - argparse: For command-line argument parsing.
-- os, csv, zipfile: For file handling (ZIP file extraction, CSV writing).
+- os, csv, zipfile: For file handling (ZIP file reading, CSV writing).
 - inspect: For inspecting function signatures and models.
-- torch, torchvision: For loading and
-using pretrained models to extract embeddings.
-- PIL, cv2: For image processing tasks
-such as resizing, normalization, and conversion.
+- torch, torchvision: For loading and using pretrained models to extract embeddings.
+- PIL, cv2: For image processing tasks such as resizing, normalization, and conversion.
 """
 
 import argparse
@@ -22,9 +18,7 @@ import csv
 import inspect
 import logging
 import os
-import tempfile
 import zipfile
-import shutil
 from inspect import signature
 
 import cv2
@@ -123,35 +117,29 @@ class RGBAtoRGBTransform:
         return img
 
 
-def extract_zip(zip_file):
-    """Extracts a ZIP file into a writable directory and
-    returns the directory and file list."""
-    output_dir = tempfile.mkdtemp(prefix="extracted_zip_")
+def get_image_files_from_zip(zip_file):
+    """Returns a list of image file names in the ZIP file."""
     try:
-        file_list = []
         with zipfile.ZipFile(zip_file, "r") as zip_ref:
-            zip_ref.extractall(output_dir)
             file_list = [
                 f for f in zip_ref.namelist() if f.lower().endswith(
                     (".png", ".jpg", ".jpeg", ".bmp", ".gif")
-                )]
-        logging.info(f"ZIP extracted to: {output_dir}")
-        return output_dir, file_list
+                )
+            ]
+        return file_list
     except zipfile.BadZipFile as exc:
-        shutil.rmtree(output_dir, ignore_errors=True)
         raise RuntimeError("Invalid ZIP file.") from exc
     except Exception as exc:
-        shutil.rmtree(output_dir, ignore_errors=True)
-        raise RuntimeError("Error extracting ZIP file.") from exc
+        raise RuntimeError("Error reading ZIP file.") from exc
 
 
 def load_model(model_name, device):
-    """Loads a specified torchvision model and
+    """Loads a specified torchvision model and 
     modifies it for feature extraction."""
     if model_name not in AVAILABLE_MODELS:
         raise ValueError(
             f"Unsupported model: {model_name}. \
-                Available models: {list(AVAILABLE_MODELS.keys())}")
+            Available models: {list(AVAILABLE_MODELS.keys())}")
     try:
         if "weights" in inspect.signature(
                 AVAILABLE_MODELS[model_name]).parameters:
@@ -172,17 +160,6 @@ def load_model(model_name, device):
 
     model.eval()
     return model
-
-
-def process_image(image_path, transform, device):
-    """Processes a single image for sequential fallback."""
-    try:
-        image = Image.open(image_path)
-        image = transform(image)
-        return image.unsqueeze(0).to(device), os.path.basename(image_path)
-    except Exception as e:
-        logging.warning("Skipping %s: %s", image_path, e)
-        return None, os.path.basename(image_path)
 
 
 def write_csv(output_csv, list_embeddings, ludwig_format=False):
@@ -214,10 +191,14 @@ def write_csv(output_csv, list_embeddings, ludwig_format=False):
             logging.info("No valid images found. Empty CSV created.")
 
 
-def extract_embeddings(model_name, apply_normalization, output_dir,
-                       file_list, transform_type="rgb"):
-    """Extracts embeddings from images using
-    batch processing or sequential fallback."""
+def extract_embeddings(
+        model_name,
+        apply_normalization,
+        zip_file,
+        file_list,
+        transform_type="rgb"):
+    """Extracts embeddings from images
+    using batch processing or sequential fallback."""
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = load_model(model_name, device)
@@ -248,23 +229,27 @@ def extract_embeddings(model_name, apply_normalization, output_dir,
     transform = transforms.Compose(transform_list)
 
     class ImageDataset(Dataset):
-        def __init__(self, file_list, transform=None):
-            self.file_list = [os.path.join(output_dir, f) for f in file_list]
+        def __init__(self, zip_file, file_list, transform=None):
+            self.zip_file = zip_file
+            self.file_list = file_list
             self.transform = transform
 
         def __len__(self):
             return len(self.file_list)
 
         def __getitem__(self, idx):
-            img_path = self.file_list[idx]
-            try:
-                image = Image.open(img_path)
-                if self.transform:
-                    image = self.transform(image)
-                return image, os.path.basename(img_path)
-            except Exception as e:
-                logging.warning("Skipping %s: %s", img_path, e)
-                return None, os.path.basename(img_path)
+            with zipfile.ZipFile(self.zip_file, "r") as zip_ref:
+                with zip_ref.open(self.file_list[idx]) as file:
+                    try:
+                        image = Image.open(file)
+                        if self.transform:
+                            image = self.transform(image)
+                        return image, os.path.basename(self.file_list[idx])
+                    except Exception as e:
+                        logging.warning(
+                            "Skipping %s: %s", self.file_list[idx], e
+                        )
+                        return None, os.path.basename(self.file_list[idx])
 
     # Custom collate function
     def collate_fn(batch):
@@ -278,7 +263,7 @@ def extract_embeddings(model_name, apply_normalization, output_dir,
     with torch.inference_mode():
         try:
             # Try DataLoader with reduced resource usage
-            dataset = ImageDataset(file_list, transform=transform)
+            dataset = ImageDataset(zip_file, file_list, transform=transform)
             dataloader = DataLoader(
                 dataset,
                 batch_size=16,  # Reduced for lower memory usage
@@ -295,41 +280,44 @@ def extract_embeddings(model_name, apply_normalization, output_dir,
                 for name, embedding in zip(names, embeddings):
                     list_embeddings.append([name] + embedding.tolist())
         except RuntimeError as e:
-            logging.warning(f"DataLoader failed: {e}. \
-                            Falling back to sequential processing.")
+            logging.warning(
+                f"DataLoader failed: {e}. \
+                Falling back to sequential processing."
+            )
             # Fallback to sequential processing
             for file in file_list:
-                file = os.path.join(output_dir, file)
-                input_tensor, name = process_image(file, transform, device)
-                if input_tensor is None:
-                    continue
-                embedding = model(input_tensor).squeeze().cpu().numpy()
-                list_embeddings.append([name] + embedding.tolist())
+                with zipfile.ZipFile(zip_file, "r") as zip_ref:
+                    with zip_ref.open(file) as img_file:
+                        try:
+                            image = Image.open(img_file)
+                            image = transform(image)
+                            input_tensor = image.unsqueeze(0).to(device)
+                            embedding = model(input_tensor).squeeze().cpu().numpy()
+                            list_embeddings.append(
+                                [os.path.basename(file)] + embedding.tolist()
+                            )
+                        except Exception as e:
+                            logging.warning("Skipping %s: %s", file, e)
 
     return list_embeddings
 
 
 def main(zip_file, output_csv, model_name, apply_normalization=False,
          transform_type="rgb", ludwig_format=False):
-    """Main entry point for processing the zip file
-    and extracting embeddings."""
-    output_dir, file_list = extract_zip(zip_file)
-    logging.info("ZIP extracted")
+    """Main entry point for processing the zip file and
+    extracting embeddings."""
+    file_list = get_image_files_from_zip(zip_file)
+    logging.info("Image files listed from ZIP")
 
-    try:
-        list_embeddings = extract_embeddings(
-            model_name,
-            apply_normalization,
-            output_dir,
-            file_list,
-            transform_type
-        )
-        logging.info("Embeddings extracted")
-        write_csv(output_csv, list_embeddings, ludwig_format)
-    finally:
-        # Clean up temporary directory
-        shutil.rmtree(output_dir, ignore_errors=True)
-        logging.info(f"Temporary directory {output_dir} cleaned up")
+    list_embeddings = extract_embeddings(
+        model_name,
+        apply_normalization,
+        zip_file,
+        file_list,
+        transform_type
+    )
+    logging.info("Embeddings extracted")
+    write_csv(output_csv, list_embeddings, ludwig_format)
 
 
 if __name__ == "__main__":
